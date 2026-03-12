@@ -1,0 +1,16 @@
+services:
+  net-scanner:
+    build: .
+    image: net-scanner:latest
+    container_name: net-scanner
+    restart: unless-stopped
+    environment:
+      SCAN_SUBNET: "${SCAN_SUBNET:-192.168.1.0/24}"
+      INTERVAL: "${INTERVAL:-300}"
+      DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL}"
+    # Accès au LAN réel (sinon on scannera le réseau Docker)
+    network_mode: host
+    # nmap -sn (ARP) a besoin de capacités réseau brutes
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN

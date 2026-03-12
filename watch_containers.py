@@ -229,6 +229,10 @@ def main() -> int:
 
     while True:
         current = list_containers()
+        _log_err(
+            f"[docker-watcher] Scan: {len(current)} conteneur(s) trouvés, "
+            f"précédent={len(previous)}"
+        )
         if not current and not previous:
             # Rien à signaler, on attend simplement.
             time.sleep(POLL_INTERVAL)
@@ -236,7 +240,10 @@ def main() -> int:
 
         if not previous:
             # Premier état connu : envoi de l'état complet.
-            if not _post_webhook(DOCKER_WEBHOOK_URL, _content_startup(current)):
+            _log_err("[docker-watcher] Envoi de l'état complet initial à Discord…")
+            if _post_webhook(DOCKER_WEBHOOK_URL, _content_startup(current)):
+                _log_err("[docker-watcher] Notification de démarrage envoyée avec succès.")
+            else:
                 _log_err("[docker-watcher] Échec de la notification de démarrage.")
             previous = current
             save_state(STATE_PATH, current)
@@ -245,8 +252,14 @@ def main() -> int:
 
         changed, new, gone = diff_containers(current, previous)
         if changed or new or gone:
+            _log_err(
+                "[docker-watcher] Changement détecté : "
+                f"changed={len(changed)}, new={len(new)}, gone={len(gone)}"
+            )
             content = _content_diff(changed, new, gone, current)
+            _log_err("[docker-watcher] Envoi de la notification de changement à Discord…")
             if _post_webhook(DOCKER_WEBHOOK_URL, content):
+                _log_err("[docker-watcher] Notification de changement envoyée avec succès.")
                 previous = current
                 save_state(STATE_PATH, current)
             else:

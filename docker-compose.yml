@@ -16,3 +16,15 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
+
+  docker-watcher:
+    build: .
+    image: net-scanner:latest
+    container_name: docker-watcher
+    restart: unless-stopped
+    environment:
+      DOCKER_WEBHOOK_URL: "${DOCKER_WEBHOOK_URL}"
+      DOCKER_POLL_INTERVAL: "${DOCKER_POLL_INTERVAL:-10}"
+      DOCKER_SOCKET_PATH: "${DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro

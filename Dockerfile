@@ -9,6 +9,7 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 COPY scan_and_notify.py /app/
+COPY watch_containers.py /app/
 
 # nmap -sn nécessite des capacités réseau (ARP)
 # On lance le script via le entrypoint du compose

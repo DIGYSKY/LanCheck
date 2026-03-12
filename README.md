@@ -28,4 +28,20 @@ Le premier run remplit le cache et envoie l’état au démarrage. Les suivants 
 
 - `Dockerfile` — image Alpine + nmap + Python 3
 - `scan_and_notify.py` — scan nmap, diff, Discord + ntfy (stdlib uniquement)
-- `docker-compose.yml` — service + volume `scanner-data` pour l’état
+- `watch_containers.py` — surveillance des conteneurs Docker + notifications
+- `docker-compose.yml` — services (scanner LAN + watcher Docker)
+
+## Service de surveillance Docker
+
+Un second service, `docker-watcher`, envoie :
+
+- **au démarrage** : l’état complet de tous les conteneurs Docker
+- **à chaque changement de statut** (start/stop/restart, etc.) : une notification avec les conteneurs impactés + l’état complet actuel
+
+Configuration supplémentaire dans `.env` :
+
+- `DOCKER_WEBHOOK_URL` — second webhook Discord dédié au statut Docker
+- `DOCKER_POLL_INTERVAL` — intervalle de polling de l’API Docker (en secondes, défaut 10)
+- `DOCKER_SOCKET_PATH` — chemin du socket Docker (défaut `/var/run/docker.sock`)
+
+Le service monte automatiquement `/var/run/docker.sock` en lecture seule pour interroger l’API Docker du host.

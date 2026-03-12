@@ -26,7 +26,8 @@ Le premier run remplit le cache et envoie l’état au démarrage. Les suivants 
 
 ## Fichiers
 
-- `Dockerfile` — image Alpine + nmap + Python 3
+- `Dockerfile` — image Alpine + nmap + Python 3 pour le scan LAN
+- `Dockerfile.docker-watcher` — image Alpine + Python 3 pour la surveillance Docker
 - `scan_and_notify.py` — scan nmap, diff, Discord + ntfy (stdlib uniquement)
 - `watch_containers.py` — surveillance des conteneurs Docker + notifications
 - `docker-compose.yml` — services (scanner LAN + watcher Docker)

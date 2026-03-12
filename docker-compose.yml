@@ -1,6 +1,8 @@
 services:
   net-scanner:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: net-scanner:latest
     container_name: net-scanner
     restart: unless-stopped
@@ -18,8 +20,10 @@ services:
       - NET_ADMIN
 
   docker-watcher:
-    build: .
-    image: net-scanner:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.docker-watcher
+    image: docker-watcher:latest
     container_name: docker-watcher
     restart: unless-stopped
     environment:

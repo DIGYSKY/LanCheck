@@ -22,7 +22,7 @@ Conteneur Docker qui scanne le LAN à intervalle régulier, détecte les apparei
 docker compose up -d
 ```
 
-Le premier run remplit le cache et envoie l’état au démarrage. Les suivants notifient uniquement en cas de **diff** (nouveaux / partis). Discord + ntfy peuvent être utilisés ensemble ; il suffit qu’un envoi réussisse.
+Le premier run remplit le cache et envoie l’état au démarrage. Les suivants notifient uniquement en cas de **diff** (nouveaux / partis). Chaque appareil est affiché avec **IP — MAC — nom** (nom résolu par reverse DNS / mDNS si disponible). Discord + ntfy peuvent être utilisés ensemble ; il suffit qu’un envoi réussisse.
 
 ## Fichiers
 

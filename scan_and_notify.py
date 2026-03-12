@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib import request
 from urllib.error import HTTPError, URLError
@@ -55,8 +57,42 @@ def parse_arpscan_output(text: str) -> list[dict[str, str]]:
         if len(parts) >= 2 and ":" in parts[1]:
             ip, mac = parts[0], parts[1]
             if ip and not ip.startswith("#"):
-                hosts.append({"ip": ip, "mac": mac})
+                hosts.append({"ip": ip, "mac": mac, "hostname": ""})
     return hosts
+
+
+def _resolve_one(ip: str) -> str:
+    """Résout le nom d'hôte (reverse DNS / mDNS). Retourne '' si inconnu."""
+    try:
+        name, _, _ = socket.gethostbyaddr(ip)
+        if name and name != ip:
+            if name.endswith(".local."):
+                name = name[:-7]
+            elif name.endswith(".local"):
+                name = name[:-6]
+            return name.strip() or ""
+    except (socket.herror, socket.gaierror, socket.timeout, OSError):
+        pass
+    return ""
+
+
+def enrich_hostnames(hosts: list[dict[str, str]], wait_per_host: float = 2.0) -> None:
+    """Ajoute le champ hostname à chaque entrée (résolution parallèle, timeout par IP)."""
+    to_resolve = [h for h in hosts if not h.get("hostname")]
+    if not to_resolve:
+        for h in hosts:
+            h.setdefault("hostname", "—")
+        return
+    with ThreadPoolExecutor(max_workers=min(10, len(to_resolve))) as ex:
+        futures = {ex.submit(_resolve_one, h["ip"]): h for h in to_resolve}
+        for future in as_completed(futures, timeout=len(to_resolve) * wait_per_host + 5):
+            h = futures[future]
+            try:
+                h["hostname"] = future.result(timeout=wait_per_host) or "—"
+            except Exception:
+                h["hostname"] = "—"
+    for h in hosts:
+        h.setdefault("hostname", "—")
 
 
 def run_nmap_scan(subnet: str, interface: str | None) -> list[dict[str, str]]:
@@ -108,7 +144,14 @@ def parse_nmap_xml(xml_str: str) -> list[dict[str, str]]:
             elif atype == "mac":
                 mac = addr_val
         if ip:
-            hosts.append({"ip": ip, "mac": mac or "—"})
+            hostname = ""
+            hostnames_el = _find_child(host, "hostnames")
+            if hostnames_el is not None:
+                for hn in hostnames_el.findall("hostname") or []:
+                    if hn.get("name"):
+                        hostname = hn.get("name", "")
+                        break
+            hosts.append({"ip": ip, "mac": mac or "—", "hostname": hostname})
     # Si trop d’entrées sans aucune MAC → scan en mode ping, pas ARP : ignorer (évite 256 faux positifs)
     if len(hosts) > 100 and not any(h.get("mac") and h["mac"] != "—" for h in hosts):
         _log_err("[scan] Trop d’hôtes sans MAC (scan non-ARP?) — résultat ignoré. Vérifier cap NET_RAW et réseau.")
@@ -147,7 +190,8 @@ def diff(
 
 
 def format_device(d: dict[str, str]) -> str:
-    return f"`{d['ip']}` — {d['mac']}"
+    name = d.get("hostname") or "—"
+    return f"`{d['ip']}` — {d['mac']} — {name}"
 
 
 def _post_webhook(webhook_url: str, content: str) -> bool:
@@ -247,6 +291,7 @@ def main() -> int:
     current = run_arp_scan(SUBNET, iface)
     if not current:
         current = run_nmap_scan(SUBNET, iface)
+    enrich_hostnames(current)
     if not current and previous:
         # Scan vide : on ne met pas à jour l'état pour éviter des faux "partis"
         return 0

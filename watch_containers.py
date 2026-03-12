@@ -119,7 +119,7 @@ def diff_containers(
     """
     Retourne (changed, new, gone) par rapport à l'état précédent.
 
-    - changed : même id, mais state/status différents
+    - changed : même id, mais state différent
     - new : id présent seulement dans current
     - gone : id présent seulement dans previous
     """
@@ -134,10 +134,9 @@ def diff_containers(
         prev = prev_by_id.get(cid)
         if not prev:
             continue
-        if (curr.get("state"), curr.get("status")) != (
-            prev.get("state"),
-            prev.get("status"),
-        ):
+        # On ne compare que "state" pour éviter les variations d'uptime
+        # (ex: "Up 13 minutes" -> "Up 14 minutes") qui feraient des notifs inutiles.
+        if curr.get("state") != prev.get("state"):
             changed.append(curr)
 
     return changed, new, gone

@@ -274,7 +274,7 @@ def _content_startup(current: list[dict[str, str]]) -> str:
     return f"**État au démarrage** ({len(current)} appareil(s))\n{lines}"
 
 
-def _content_diff(new: list, gone: list) -> str:
+def _content_diff(new: list, gone: list, current: list[dict[str, str]]) -> str:
     parts = []
     if new:
         lines = "\n".join(format_device(d) for d in new)
@@ -282,6 +282,10 @@ def _content_diff(new: list, gone: list) -> str:
     if gone:
         lines = "\n".join(format_device(d) for d in gone)
         parts.append(f"**Partis du LAN**\n{lines}")
+    # État complet comme au démarrage
+    if current:
+        lines = "\n".join(format_device(d) for d in current)
+        parts.append(f"**État actuel** ({len(current)} appareil(s))\n{lines}")
     return "\n\n".join(parts)
 
 
@@ -306,7 +310,7 @@ def main() -> int:
         return 0
     # Sinon : notifier seulement en cas de diff
     new, gone = diff(current, previous)
-    if (new or gone) and not _send_notifications(_content_diff(new, gone)):
+    if (new or gone) and not _send_notifications(_content_diff(new, gone, current)):
         _log_err("Notification failed (see [Discord]/[ntfy] lines above)")
         return 1
     return 0

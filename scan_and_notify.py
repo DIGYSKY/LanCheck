@@ -16,12 +16,54 @@ from urllib.error import HTTPError, URLError
 
 STATE_PATH = Path("/data/state.json")
 SUBNET = os.environ.get("SCAN_SUBNET", "192.168.1.0/24")
+SCAN_INTERFACE = os.environ.get("SCAN_INTERFACE", "").strip()
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 
 
-def run_nmap_scan(subnet: str) -> list[dict[str, str]]:
-    """Lance nmap -sn (ARP) et retourne une liste de {ip, mac}."""
-    cmd = ["nmap", "-sn", "-oX", "-", subnet]
+def _log_err(msg: str) -> None:
+    """Écrit sur stderr avec flush pour que Docker affiche tout de suite."""
+    print(msg, file=sys.stderr, flush=True)
+
+
+def run_arp_scan(subnet: str, interface: str | None) -> list[dict[str, str]]:
+    """Lance arp-scan (ARP uniquement) : ne retourne que les appareils répondant + MAC."""
+    cmd = ["arp-scan", "--retry=2", "-q", subnet]
+    if interface:
+        cmd = ["arp-scan", "-I", interface, "--retry=2", "-q", subnet]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return []
+    if result.returncode != 0:
+        _log_err(f"[scan] arp-scan exit {result.returncode}, stderr: {result.stderr[:200] if result.stderr else '—'}")
+        return []
+    return parse_arpscan_output(result.stdout)
+
+
+def parse_arpscan_output(text: str) -> list[dict[str, str]]:
+    """Parse la sortie arp-scan : IP, MAC, (optionnel) Vendor (tab ou espaces)."""
+    hosts: list[dict[str, str]] = []
+    for line in text.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and ":" in parts[1]:
+            ip, mac = parts[0], parts[1]
+            if ip and not ip.startswith("#"):
+                hosts.append({"ip": ip, "mac": mac})
+    return hosts
+
+
+def run_nmap_scan(subnet: str, interface: str | None) -> list[dict[str, str]]:
+    """Fallback nmap -sn -PR (ARP)."""
+    cmd = ["nmap", "-sn", "-PR", "-oX", "-", subnet]
+    if interface:
+        cmd = ["nmap", "-sn", "-PR", "-e", interface, "-oX", "-", subnet]
     try:
         result = subprocess.run(
             cmd,
@@ -37,14 +79,25 @@ def run_nmap_scan(subnet: str) -> list[dict[str, str]]:
     return parse_nmap_xml(result.stdout)
 
 
+def _find_child(node: ET.Element, tag_suffix: str) -> ET.Element | None:
+    """Trouve un enfant par nom de balise (gère le namespace nmap)."""
+    for child in node:
+        if child.tag.endswith(tag_suffix) or child.tag == tag_suffix:
+            return child
+    return None
+
+
 def parse_nmap_xml(xml_str: str) -> list[dict[str, str]]:
-    """Parse la sortie XML de nmap et extrait (ip, mac) par host."""
+    """Parse la sortie XML de nmap et extrait (ip, mac) par host. Uniquement les hôtes « up »."""
     hosts: list[dict[str, str]] = []
     try:
         root = ET.fromstring(xml_str)
     except ET.ParseError:
         return hosts
     for host in root.findall(".//host"):
+        status = _find_child(host, "status")
+        if status is not None and status.get("state") != "up":
+            continue
         ip = ""
         mac = ""
         for addr in host.findall("address"):
@@ -56,6 +109,10 @@ def parse_nmap_xml(xml_str: str) -> list[dict[str, str]]:
                 mac = addr_val
         if ip:
             hosts.append({"ip": ip, "mac": mac or "—"})
+    # Si trop d’entrées sans aucune MAC → scan en mode ping, pas ARP : ignorer (évite 256 faux positifs)
+    if len(hosts) > 100 and not any(h.get("mac") and h["mac"] != "—" for h in hosts):
+        _log_err("[scan] Trop d’hôtes sans MAC (scan non-ARP?) — résultat ignoré. Vérifier cap NET_RAW et réseau.")
+        return []
     return hosts
 
 
@@ -93,11 +150,6 @@ def format_device(d: dict[str, str]) -> str:
     return f"`{d['ip']}` — {d['mac']}"
 
 
-def _log_err(msg: str) -> None:
-    """Écrit sur stderr avec flush pour que Docker affiche tout de suite."""
-    print(msg, file=sys.stderr, flush=True)
-
-
 def _post_webhook(webhook_url: str, content: str) -> bool:
     """Envoie un message texte au webhook Discord. Log l'erreur en cas d'échec."""
     if len(content) > 2000:
@@ -106,7 +158,10 @@ def _post_webhook(webhook_url: str, content: str) -> bool:
     req = request.Request(
         webhook_url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "DiscordBot (https://discord.com, 1.0)",
+        },
         method="POST",
     )
     try:
@@ -134,17 +189,48 @@ def _post_webhook(webhook_url: str, content: str) -> bool:
         return False
 
 
-def send_discord_startup(webhook_url: str, current: list[dict[str, str]]) -> bool:
-    """Envoie l'état actuel au webhook (message « État au démarrage »)."""
-    if not current:
-        return True
+def _post_ntfy(topic: str, content: str) -> bool:
+    """Envoie un message à ntfy.sh (contourne Cloudflare, utile derrière VPN)."""
+    url = f"https://ntfy.sh/{topic}"
+    body = content[:4096].encode("utf-8")
+    req = request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "text/plain; charset=utf-8", "X-Title": "LAN Check"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=10) as resp:
+            if 200 <= resp.status < 300:
+                return True
+            _log_err(f"[ntfy] HTTP {resp.status}")
+            return False
+    except HTTPError as e:
+        _log_err(f"[ntfy] HTTP {e.code}")
+        return False
+    except (URLError, OSError, Exception) as e:
+        _log_err(f"[ntfy] Error: {e}")
+        return False
+
+
+def _send_notifications(content: str) -> bool:
+    """Envoie le message à Discord et/ou ntfy. Retourne True si au moins un envoi a réussi."""
+    ok = False
+    if DISCORD_WEBHOOK_URL:
+        if _post_webhook(DISCORD_WEBHOOK_URL, content):
+            ok = True
+    if NTFY_TOPIC:
+        if _post_ntfy(NTFY_TOPIC, content):
+            ok = True
+    return ok
+
+
+def _content_startup(current: list[dict[str, str]]) -> str:
     lines = "\n".join(format_device(d) for d in current)
-    content = f"**État au démarrage** ({len(current)} appareil(s))\n{lines}"
-    return _post_webhook(webhook_url, content)
+    return f"**État au démarrage** ({len(current)} appareil(s))\n{lines}"
 
 
-def send_discord(webhook_url: str, new: list, gone: list) -> bool:
-    """Envoie un message au webhook Discord avec le diff."""
+def _content_diff(new: list, gone: list) -> str:
     parts = []
     if new:
         lines = "\n".join(format_device(d) for d in new)
@@ -152,31 +238,31 @@ def send_discord(webhook_url: str, new: list, gone: list) -> bool:
     if gone:
         lines = "\n".join(format_device(d) for d in gone)
         parts.append(f"**Partis du LAN**\n{lines}")
-    if not parts:
-        return True
-    content = "\n\n".join(parts)
-    return _post_webhook(webhook_url, content)
+    return "\n\n".join(parts)
 
 
 def main() -> int:
     previous = load_state(STATE_PATH)
-    current = run_nmap_scan(SUBNET)
+    iface = SCAN_INTERFACE or None
+    current = run_arp_scan(SUBNET, iface)
+    if not current:
+        current = run_nmap_scan(SUBNET, iface)
     if not current and previous:
         # Scan vide : on ne met pas à jour l'état pour éviter des faux "partis"
         return 0
     save_state(STATE_PATH, current)
-    if not DISCORD_WEBHOOK_URL:
+    if not DISCORD_WEBHOOK_URL and not NTFY_TOPIC:
         return 0
     # Au démarrage (pas d'état précédent) : envoyer l'état actuel
     if not previous:
-        if current and not send_discord_startup(DISCORD_WEBHOOK_URL, current):
-            _log_err("Discord webhook failed (see [Discord] line above for details)")
+        if current and not _send_notifications(_content_startup(current)):
+            _log_err("Notification failed (see [Discord]/[ntfy] lines above)")
             return 1
         return 0
     # Sinon : notifier seulement en cas de diff
     new, gone = diff(current, previous)
-    if (new or gone) and not send_discord(DISCORD_WEBHOOK_URL, new, gone):
-        _log_err("Discord webhook failed (see [Discord] line above for details)")
+    if (new or gone) and not _send_notifications(_content_diff(new, gone)):
+        _log_err("Notification failed (see [Discord]/[ntfy] lines above)")
         return 1
     return 0
 

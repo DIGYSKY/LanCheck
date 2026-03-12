@@ -2,6 +2,7 @@
 FROM alpine:3.19
 
 RUN apk add --no-cache \
+    arp-scan \
     nmap \
     python3 \
     && rm -rf /var/cache/apk/*

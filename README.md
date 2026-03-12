@@ -1,6 +1,6 @@
 # net-scanner
 
-Conteneur Docker qui scanne le LAN à intervalle régulier, détecte les appareils **nouveaux** ou **partis**, et envoie un résumé sur un webhook Discord.
+Conteneur Docker qui scanne le LAN à intervalle régulier, détecte les appareils **nouveaux** ou **partis**, et envoie un résumé par **Discord** et/ou **ntfy** (push).
 
 ## Prérequis
 
@@ -13,7 +13,7 @@ Conteneur Docker qui scanne le LAN à intervalle régulier, détecte les apparei
    ```bash
    cp .env.example .env
    ```
-2. Édite `.env` et renseigne au minimum `DISCORD_WEBHOOK_URL` (crée un webhook dans Discord : serveur → Paramètres → Intégrations → Webhooks).
+2. Édite `.env` : **Discord** (`DISCORD_WEBHOOK_URL`) et/ou **ntfy** (`NTFY_TOPIC`, ex. `lan-check-skynas`). Si Discord renvoie 403/1010 (VPN/datacenter), utilise ntfy : abonne-toi au topic sur [ntfy.sh](https://ntfy.sh).
 3. Ajuste `SCAN_SUBNET` et `INTERVAL` si besoin.
 
 ## Lancement
@@ -22,10 +22,10 @@ Conteneur Docker qui scanne le LAN à intervalle régulier, détecte les apparei
 docker compose up -d
 ```
 
-Le premier run remplit le cache (`/data/state.json`). Les runs suivants comparent avec ce cache et envoient un message Discord uniquement en cas de **diff** (nouveaux / partis).
+Le premier run remplit le cache et envoie l’état au démarrage. Les suivants notifient uniquement en cas de **diff** (nouveaux / partis). Discord + ntfy peuvent être utilisés ensemble ; il suffit qu’un envoi réussisse.
 
 ## Fichiers
 
 - `Dockerfile` — image Alpine + nmap + Python 3
-- `scan_and_notify.py` — scan nmap, diff, envoi Discord (stdlib uniquement)
+- `scan_and_notify.py` — scan nmap, diff, Discord + ntfy (stdlib uniquement)
 - `docker-compose.yml` — service + volume `scanner-data` pour l’état
